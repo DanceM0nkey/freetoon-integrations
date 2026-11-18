@@ -238,7 +238,7 @@ static void write_action_state(void) {
              (int)getpid(), mb_action_name(g_action), (long long)(g_action ? g_child_started : 0),
              mb_action_name(g_last_action), g_last_failed ? "true" : "false", (long long)g_last_done, msg,
              g_autostart_paused ? "true" : "false");
-    mb_mkdirs(MB_RUN_DIR);
+    if (mb_secure_dir(MB_RUN_DIR) != 0) { logf_("%s is not a safe directory, not writing", MB_RUN_DIR); return; }
     if (mb_write_atomic(MB_ACTION_PATH, json, 0) != 0) logf_("cannot write %s: %s", MB_ACTION_PATH, strerror(errno));
 }
 
@@ -330,9 +330,11 @@ static int foreign_job_running(void) {
 }
 
 static void read_command(const char * script) {
-    char * text = mb_read_file(MB_COMMAND_PATH);
+    /* only from our own root-only folder, never through a symlink */
+    if (mb_secure_dir(MB_RUN_DIR) != 0) return;
+    char * text = mb_read_file_nofollow(MB_COMMAND_PATH);
+    unlink(MB_COMMAND_PATH);                      /* also whatever else sits there */
     if (!text) return;
-    unlink(MB_COMMAND_PATH);
     text[strcspn(text, "\r\n")] = 0;
     mb_action_t a = mb_action_from_name(text);
     if (a != MB_ACT_RESTART && a != MB_ACT_RESET) logf_("ignoring unknown command '%.32s'", text);

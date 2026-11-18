@@ -64,7 +64,7 @@ abi-check: $(OUT) $(SO_OUT)
 # ---- host --------------------------------------------------------------
 HOSTCC ?= cc
 test:
-	$(HOSTCC) -std=c99 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -g tests/test_logic.c $(LOGIC) \
+	$(HOSTCC) -std=c99 -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE -Wall -Wextra -g tests/test_logic.c $(LOGIC) \
 	    -o tests/test_logic -lm
 	./tests/test_logic
 

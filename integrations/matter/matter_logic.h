@@ -26,7 +26,9 @@
 #include <sys/types.h>
 
 #define MB_APP_DIR          "/mnt/data/integrations/matter"
-#define MB_RUN_DIR          "/var/volatile/tmp/freetoon-matter"
+/* Root-only (0700) on /var/run, not in the world-writable tmp folder: the
+ * command file asks the daemon to restart or reset the bridge. */
+#define MB_RUN_DIR          "/var/run/freetoon-matter"
 #define MB_COMMAND_PATH     MB_RUN_DIR "/command"
 #define MB_ACTION_PATH      MB_RUN_DIR "/action.json"
 #define MB_STATUS_PATH      "/var/volatile/tmp/toon-matter-bridge/status.json"
@@ -136,6 +138,11 @@ char *       mb_read_file(const char * path);                 /* malloc'd, NUL-t
 char *       mb_read_tail(const char * path, size_t max);      /* last `max` bytes */
 int          mb_write_atomic(const char * path, const char * data, int do_fsync);
 int          mb_mkdirs(const char * dir);
+/* Creates `dir` (mode 0700) if needed and checks it is a real directory
+ * owned by this user with no group/other write access. 0 if safe. */
+int          mb_secure_dir(const char * dir);
+/* Reads a small file without following a symlink; malloc'd or NULL. */
+char *       mb_read_file_nofollow(const char * path);
 
 const char * mb_action_name(mb_action_t a);
 mb_action_t  mb_action_from_name(const char * s);

@@ -200,11 +200,47 @@ static void test_prefs(void) {
 }
 
 static void test_command(void) {
-    char cmd[320];
+    char cmd[320], dir[320], link[320], target[320];
     snprintf(cmd, sizeof cmd, "%s/run/sub/command", g_dir);
     CHECK(mb_send_command(cmd, "reset") == 0);
-    char * t = mb_read_file(cmd);
+    char * t = mb_read_file_nofollow(cmd);
     CHECK(t && !strcmp(t, "reset\n"));
+    free(t);
+    snprintf(dir, sizeof dir, "%s/run/sub", g_dir);
+    struct stat st;
+    CHECK(stat(dir, &st) == 0 && (st.st_mode & 0777) == 0700);
+
+    /* a folder someone else could write gets tightened */
+    chmod(dir, 0777);
+    CHECK(mb_secure_dir(dir) == 0 && stat(dir, &st) == 0 && (st.st_mode & 0777) == 0700);
+
+    /* a symlinked run folder is refused */
+    snprintf(target, sizeof target, "%s/elsewhere", g_dir);
+    snprintf(link, sizeof link, "%s/run/linked", g_dir);
+    mb_mkdirs(target);
+    CHECK(symlink(target, link) == 0);
+    snprintf(cmd, sizeof cmd, "%s/command", link);
+    CHECK(mb_secure_dir(link) != 0);
+    CHECK(mb_send_command(cmd, "reset") != 0);
+
+    /* a symlinked command file is not followed */
+    snprintf(cmd, sizeof cmd, "%s/run/sub/command", g_dir);
+    unlink(cmd);
+    put("secret.txt", "restart\n");
+    CHECK(symlink(path("secret.txt"), cmd) == 0);
+    CHECK(mb_read_file_nofollow(cmd) == NULL);
+
+    /* a planted file or symlink at the temp name is never written through */
+    char tmpname[400];
+    snprintf(tmpname, sizeof tmpname, "%s.tmp-%d", path("victim.json"), (int)getpid());
+    put("target.txt", "keep\n");
+    CHECK(symlink(path("target.txt"), tmpname) == 0);
+    CHECK(mb_write_atomic(path("victim.json"), "new\n", 0) == 0);
+    t = mb_read_file(path("target.txt"));
+    CHECK(t && !strcmp(t, "keep\n"));
+    free(t);
+    t = mb_read_file(path("victim.json"));
+    CHECK(t && !strcmp(t, "new\n"));
     free(t);
 }
 

@@ -58,8 +58,10 @@ The daemon:
    service has been down for 45 s the daemon starts it (three tries two
    minutes apart, then every 30 minutes; a healthy bridge resets the count);
 3. runs the screen's requests, so toonui never blocks: the screen writes
-   `restart` or `reset` to `/var/volatile/tmp/freetoon-matter/command`, the
-   daemon runs it and reports in `/var/volatile/tmp/freetoon-matter/action.json`.
+   `restart` or `reset` to `/var/run/freetoon-matter/command`, the daemon runs
+   it and reports in `/var/run/freetoon-matter/action.json`. That folder is
+   root-only (0700) and is refused when it is a symlink or owned by someone
+   else; files are written fresh (`O_EXCL|O_NOFOLLOW`) and renamed into place.
    **Remove pairing** stops the service, runs Matterbridge's own
    `--reset` (`toon-matter-service.sh cli --bridge --reset`: clears fabrics,
    sessions and commissioning data) and starts it again. The pairing code

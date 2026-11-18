@@ -70,7 +70,11 @@ int mb_mkdirs(const char * dir) {
 int mb_write_atomic(const char * path, const char * data, int do_fsync) {
     char tmp[300];
     if (snprintf(tmp, sizeof tmp, "%s.tmp-%d", path, (int)getpid()) >= (int)sizeof tmp) return -1;
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    /* A fresh file only: never write through a planted file or symlink. A
+     * leftover of our own (same pid after a crash) is removed once. */
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+    if (fd < 0 && errno == EEXIST && unlink(tmp) == 0)
+        fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
     if (fd < 0) return -1;
     size_t len = strlen(data), off = 0;
     while (off < len) {
@@ -81,6 +85,31 @@ int mb_write_atomic(const char * path, const char * data, int do_fsync) {
     if (do_fsync && fsync(fd) != 0) { close(fd); unlink(tmp); return -1; }
     if (close(fd) != 0 || rename(tmp, path) != 0) { unlink(tmp); return -1; }
     return 0;
+}
+
+int mb_secure_dir(const char * dir) {
+    char parent[256];
+    if (snprintf(parent, sizeof parent, "%s", dir) >= (int)sizeof parent) return -1;
+    char * slash = strrchr(parent, '/');
+    if (slash && slash != parent) { *slash = 0; mb_mkdirs(parent); }
+    if (mkdir(dir, 0700) != 0 && errno != EEXIST) return -1;
+    struct stat st;
+    if (lstat(dir, &st) != 0 || !S_ISDIR(st.st_mode) || st.st_uid != geteuid()) return -1;
+    if ((st.st_mode & 077) != 0 && chmod(dir, 0700) != 0) return -1;
+    return 0;
+}
+
+char * mb_read_file_nofollow(const char * path) {
+    int fd = open(path, O_RDONLY | O_NOFOLLOW);
+    if (fd < 0) return NULL;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size > 4096) { close(fd); return NULL; }
+    char * buf = malloc((size_t)st.st_size + 1);
+    ssize_t n = buf ? read(fd, buf, (size_t)st.st_size) : -1;
+    close(fd);
+    if (n < 0) { free(buf); return NULL; }
+    buf[n] = 0;
+    return buf;
 }
 
 static int dir_of(const char * path, char * out, size_t n) {
@@ -394,7 +423,7 @@ int mb_set_selected(const char * prefs_path, const char * id, int on) {
 
 int mb_send_command(const char * path, const char * command) {
     char dir[256], line[64];
-    if (dir_of(path, dir, sizeof dir) == 0) mb_mkdirs(dir);
+    if (dir_of(path, dir, sizeof dir) != 0 || mb_secure_dir(dir) != 0) return -1;
     snprintf(line, sizeof line, "%s\n", command);
     return mb_write_atomic(path, line, 0);
 }

@@ -556,7 +556,13 @@ static void ftapp_init(void) {
         ftlog("moved a foreign %s aside", FTAPP_RUN);
     }
     ft_mkdirs(FTAPP_RUN);
-    chmod(FTAPP_RUN, 0755);                        /* toonui (same uid) writes cmd files here */
+    /* check again after creating: it must be our own directory, not writable by
+     * others, or someone could have swapped it in between */
+    if (lstat(FTAPP_RUN, &st) != 0 || !S_ISDIR(st.st_mode) || st.st_uid != getuid()) {
+        ftlog("%s is not our own directory, stopping", FTAPP_RUN);
+        exit(1);
+    }
+    if (st.st_mode & 022) chmod(FTAPP_RUN, 0755);  /* toonui (same uid) writes cmd files here */
     ftapp_load_uuid_();
     ftlog("starting, uuid %s", ftapp_uuid);
 }

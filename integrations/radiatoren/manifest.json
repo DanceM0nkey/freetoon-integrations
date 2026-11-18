@@ -1,7 +1,7 @@
 {
   "id": "radiatoren",
   "name": "Radiatoren",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "binary": "radiatoren",
   "args": [],
   "service_id": "radiatoren",

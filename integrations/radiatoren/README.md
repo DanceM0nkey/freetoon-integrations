@@ -1,4 +1,4 @@
-# Radiatoren for FreeToon (0.3.0)
+# Radiatoren for FreeToon (0.3.1)
 
 Rooms with their own comfort and eco temperature and a weekly schedule of time
 blocks, for a Toon 1 or Toon 2 running FreeToon (LVGL). Port of the QML Radiatoren app
@@ -60,7 +60,10 @@ make test        # host unit test of the room logic (cc/clang)
 ## Notes
 
 - The plugin declares the settings fields it reads (`language`, `home_light_mode`)
-  with `FT_PLUGIN_DECLARE_ABI`; toonui refuses it if those moved. The ABI check
+  with `FT_PLUGIN_DECLARE_ABI`; toonui refuses it if those moved. 0.3.1 is built
+  against the settings layout of FreeToon 1.0.12 (upstream commit 91be3c9 inserted
+  `dim_elec_max_kwh` before `home_light_mode`, so toonui 1.0.12+ refused the 0.3.0
+  plugin); hence `min_toonui` 1.0.12. Build against a FreeToon tree of 1.0.12 or later. The ABI check
   compares LVGL major/minor only: built against LVGL 8.3.11 headers.
 - UI text is Dutch with English through FreeToon's `tr()` (Settings > language).
 - Times use the Toon's local time (`localtime_r`, `/etc/localtime`).

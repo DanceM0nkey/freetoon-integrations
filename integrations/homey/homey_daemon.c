@@ -42,6 +42,10 @@ typedef struct {
     char flows[MAX_SEL * 40];
     char devices[MAX_SEL * 40];
     int  poll_s;
+    /* older Homeys (no API keys): the app renews its own session token */
+    char cloud_refresh[512];  /* Athom OAuth refresh token (tools/homey-login.sh) */
+    char homey_id[32];        /* Homey cloud id */
+    long token_at;            /* when `token` was made (unix s) */
     int  autorun;            /* 1 = run the rules below (master switch, off by default) */
     char on_state[4][48];    /* flow to start when the Toon switches to comfort/home/sleep/away */
     char at_time[2][8];      /* "07:00" */
@@ -55,6 +59,7 @@ static long   g_conf_mtime = -1;
 static char   g_err[120];
 static jv *   g_flows;              /* merged list [{id,name,adv,enabled}] */
 static char * g_flows_json;
+static int    g_token_refused;      /* last Homey call answered 401 */
 static char * g_sel_devs;           /* JSON array of the chosen devices (compact) */
 static int    g_on_count, g_with_onoff;
 static time_t g_dev_at, g_flow_at;       /* last success */
@@ -79,6 +84,10 @@ static int load_conf(void) {
         ft_conf_get(t, "devices", c.devices, sizeof c.devices);
         if (ft_conf_get(t, "poll", v, sizeof v)) c.poll_s = atoi(v);
         if (ft_conf_get(t, "auto", v, sizeof v)) c.autorun = atoi(v) == 1;
+        ft_conf_get(t, "cloud_refresh", c.cloud_refresh, sizeof c.cloud_refresh);
+        ft_conf_get(t, "homey_id", c.homey_id, sizeof c.homey_id);
+        char ta[24];
+        if (ft_conf_get(t, "token_at", ta, sizeof ta)) c.token_at = atol(ta);
         for (int i = 0; i < 4; i++) ft_conf_get(t, STATE_KEYS[i], c.on_state[i], sizeof c.on_state[i]);
         for (int i = 0; i < 2; i++) {
             char k[16];
@@ -108,7 +117,10 @@ static int load_conf(void) {
             "# switches to that program state (button or schedule); at1_time=07:00 + at1_flow=<id>\n"
             "auto=0\n"
             "on_comfort=\non_home=\non_sleep=\non_away=\n"
-            "at1_time=\nat1_flow=\nat2_time=\nat2_flow=\n";
+            "at1_time=\nat1_flow=\nat2_time=\nat2_flow=\n"
+            "# older Homey without API keys: tools/homey-login.sh fills these and the\n"
+            "# app then renews `token` itself (every 20 h, and when Homey refuses it)\n"
+            "cloud_refresh=\nhomey_id=\ntoken_at=0\n";
         ft_write_atomic(CONF_PATH, def, strlen(def), 1);
         g_conf_mtime = ft_mtime(CONF_PATH);
     }
@@ -123,6 +135,29 @@ static int load_conf(void) {
     ftlog("config: host=%s %s flows=%d chars devices=%d chars", c.host[0] ? c.host : "(none)",
           c.token[0] ? "(token set)" : "(no token)", (int)strlen(c.flows), (int)strlen(c.devices));
     return 1;
+}
+
+/* ---- config writes (token renewal) -------------------------------------------------- */
+
+static void conf_write_key(const char * key, const char * value) {
+    char * t = ft_read_file(CONF_PATH, NULL);
+    size_t cap = (t ? strlen(t) : 0) + strlen(key) + strlen(value) + 8, o = 0, kl = strlen(key);
+    char * out = (char *)malloc(cap);
+    int done = 0;
+    if (!out) { free(t); return; }
+    for (char * line = t; line && *line; ) {
+        char * eol = strchr(line, '\n');
+        size_t ll = eol ? (size_t)(eol - line) : strlen(line);
+        if (ll > kl && !strncmp(line, key, kl) && line[kl] == '=') {
+            if (!done) o += (size_t)snprintf(out + o, cap - o, "%s=%s\n", key, value);
+            done = 1;
+        } else { memcpy(out + o, line, ll); o += ll; out[o++] = '\n'; }
+        line = eol ? eol + 1 : NULL;
+    }
+    if (!done) o += (size_t)snprintf(out + o, cap - o, "%s=%s\n", key, value);
+    ft_write_atomic(CONF_PATH, out, o, 1);       /* 0600: it holds the tokens */
+    free(out);
+    free(t);
 }
 
 /* ---- HTTP --------------------------------------------------------------------- */
@@ -153,6 +188,7 @@ static int homey_send(const char * method, const char * path, const char * json,
 
 static void set_err_for(int code) {
     int en = ft_english();
+    if (code == 401) g_token_refused = 1;
     if (code == 0) snprintf(g_err, sizeof g_err, "%s", en ? "Homey unreachable" : "Homey niet bereikbaar");
     else if (code == 401) snprintf(g_err, sizeof g_err, "%s", en ? "Homey token refused or expired" : "Homey-token geweigerd of verlopen");
     else if (code == 403) snprintf(g_err, sizeof g_err, "%s", en ? "Homey token lacks rights" : "Homey-token mist rechten");
@@ -177,6 +213,113 @@ static void jb_str(jbuf_t * j, const char * v) {
     int r = jesc(j->b, j->cap, j->len, v);
     if (r < 0) { j->full = 1; j->b[j->len] = 0; return; }
     j->len = (size_t)r;
+}
+
+/* ---- session renewal (Athom cloud -> delegation token -> Homey login) ---------------- */
+
+/* The official Homey CLI's OAuth client (public in its npm package); the
+ * refresh token from tools/homey-login.sh belongs to it. */
+#define ATHOM_API        "https://api.athom.com"
+#define ATHOM_CLIENT_ID  "64691b4358336640a5ecee5c"
+#define ATHOM_CLIENT_SEC "ed09f559ae12b1522d00431f0bf7c5755603c41e"
+#define RENEW_AFTER_S    (20 * 3600)            /* sessions live 24 h */
+
+static time_t g_renew_try;
+
+static void b64(const char * in, char * out, size_t n) {
+    static const char T[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t il = strlen(in), o = 0;
+    for (size_t i = 0; i < il && o + 5 < n; i += 3) {
+        unsigned v = (unsigned char)in[i] << 16 | (i + 1 < il ? (unsigned char)in[i + 1] << 8 : 0) | (i + 2 < il ? (unsigned char)in[i + 2] : 0);
+        out[o++] = T[v >> 18 & 63]; out[o++] = T[v >> 12 & 63];
+        out[o++] = i + 1 < il ? T[v >> 6 & 63] : '=';
+        out[o++] = i + 2 < il ? T[v & 63] : '=';
+    }
+    out[o] = 0;
+}
+
+static void form_enc(const char * in, char * out, size_t n) {
+    static const char hex[] = "0123456789ABCDEF";
+    size_t o = 0;
+    for (const unsigned char * p = (const unsigned char *)in; *p && o + 4 < n; p++) {
+        if (isalnum(*p) || *p == '-' || *p == '.' || *p == '_' || *p == '~') out[o++] = (char)*p;
+        else { out[o++] = '%'; out[o++] = hex[*p >> 4]; out[o++] = hex[*p & 15]; }
+    }
+    out[o] = 0;
+}
+
+/* 1 when a new session token was stored. */
+static int renew_session(void) {
+    if (!g_conf.cloud_refresh[0] || !g_conf.homey_id[0] || !g_conf.host[0] || !id_ok(g_conf.homey_id)) return 0;
+    time_t now = time(NULL);
+    if (now - g_renew_try < 600) return 0;          /* at most every 10 min when it fails */
+    g_renew_try = now;
+
+    /* 1. refresh token -> access token (a new refresh token may come back) */
+    char basic[160], auth[200], form[1200], enc[1100];
+    b64(ATHOM_CLIENT_ID ":" ATHOM_CLIENT_SEC, basic, sizeof basic);
+    snprintf(auth, sizeof auth, "Authorization: Basic %s", basic);
+    form_enc(g_conf.cloud_refresh, enc, sizeof enc);
+    snprintf(form, sizeof form, "grant_type=refresh_token&refresh_token=%s", enc);
+    const char * h1[] = { auth, "Accept: application/json", NULL };
+    char * body = NULL;
+    int code = ft_http_body("POST", ATHOM_API "/oauth2/token", h1, "application/x-www-form-urlencoded", form, 20, &body);
+    jv * r = code == 200 ? jparse(body) : NULL;
+    free(body);
+    const char * access = jstr(r, "access_token", "");
+    const char * refresh = jstr(r, "refresh_token", "");
+    if (!access[0]) {
+        ftlog("token renewal: Athom refused the refresh token (HTTP %d); run tools/homey-login.sh again", code);
+        snprintf(g_err, sizeof g_err, "%s", ft_english() ? "Homey login expired: log in again" : "Homey-login verlopen: opnieuw inloggen");
+        jfree(r);
+        return 0;
+    }
+    if (refresh[0] && strcmp(refresh, g_conf.cloud_refresh) != 0) {
+        snprintf(g_conf.cloud_refresh, sizeof g_conf.cloud_refresh, "%s", refresh);
+        conf_write_key("cloud_refresh", refresh);  /* store it before anything else can fail */
+    }
+
+    /* 2. access token -> delegation token for this Homey */
+    static char bearer[1200];
+    snprintf(bearer, sizeof bearer, "Authorization: Bearer %s", access);
+    jfree(r);
+    char url[200];
+    snprintf(url, sizeof url, ATHOM_API "/delegation/token?audience=homey&homeyId=%s", g_conf.homey_id);
+    const char * h2[] = { bearer, "Accept: application/json", NULL };
+    code = ft_http_body("POST", url, h2, "application/json", "{}", 20, &body);
+    jv * jwt = code >= 200 && code < 300 ? jparse(body) : NULL;
+    free(body);
+    if (!jwt || jwt->type != JV_STR) { ftlog("token renewal: no delegation token (HTTP %d)", code); jfree(jwt); return 0; }
+
+    /* 3. delegation token -> session on the Homey itself (local API) */
+    size_t ll = strlen(jwt->s) + 32;
+    char * login = (char *)malloc(ll);
+    if (!login) { jfree(jwt); return 0; }
+    for (const char * p = jwt->s; *p; p++)              /* a JWT is base64url + dots */
+        if (!isalnum((unsigned char)*p) && *p != '-' && *p != '_' && *p != '.') { free(login); jfree(jwt); return 0; }
+    snprintf(login, ll, "{\"token\":\"%s\"}", jwt->s);
+    jfree(jwt);
+    snprintf(url, sizeof url, "http://%s/api/manager/users/login", g_conf.host);
+    code = ft_http_body("POST", url, NULL, "application/json", login, 15, &body);
+    free(login);
+    jv * tok = code == 200 ? jparse(body) : NULL;
+    free(body);
+    if (!tok || tok->type != JV_STR || strlen(tok->s) >= sizeof g_conf.token) {
+        ftlog("token renewal: Homey login failed (HTTP %d)", code);
+        jfree(tok);
+        return 0;
+    }
+    snprintf(g_conf.token, sizeof g_conf.token, "%s", tok->s);
+    jfree(tok);
+    g_conf.token_at = now;
+    conf_write_key("token", g_conf.token);
+    char ts[24];
+    snprintf(ts, sizeof ts, "%ld", (long)now);
+    conf_write_key("token_at", ts);
+    g_token_refused = 0;
+    g_err[0] = 0;
+    ftlog("token renewal: new Homey session");
+    return 1;
 }
 
 /* ---- flows -------------------------------------------------------------------- */
@@ -468,6 +611,9 @@ int main(int argc, char ** argv) {
     while (ftapp_running) {
         if (load_conf()) { g_flow_try = 0; g_dev_try = 0; }
         ftapp_bxt_service();
+        if (g_conf.cloud_refresh[0] && (g_token_refused || !g_conf.token[0] || time(NULL) - g_conf.token_at > RENEW_AFTER_S)) {
+            if (renew_session()) { g_flow_try = 0; g_dev_try = 0; }
+        }
         char * cmd;
         int ran = 0;
         while ((cmd = ftapp_next_cmd())) { if (g_conf.host[0] && g_conf.token[0]) run_cmd(cmd); free(cmd); ran = 1; }

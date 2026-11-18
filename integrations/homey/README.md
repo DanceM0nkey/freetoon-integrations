@@ -27,12 +27,24 @@ The daemon uses the Homey's local Web API on your network,
 API key under *Settings > API keys* with the rights *flows* (start), *devices*
 (read, and control for the switches). That key does not expire.
 
-Older Homeys (Early 2016/2018) have no API keys. A session token works (for
-example the one the official `homey` CLI keeps after `homey login`), but Homey
-ends those sessions after 24 hours; the tile and screen then say
-*Homey-token geweigerd of verlopen*. For such a Homey something has to put a
-fresh token in `homey.conf` every day, or the flows have to be started another
-way (for example an MQTT trigger card per flow).
+Older Homeys (Early 2016/2018) have no API keys, and Homey ends every login
+session after 24 hours. For those the app renews its own session every day:
+
+1. On a computer with the Homey CLI (`npm i -g homey`), run
+   `sh tools/homey-login.sh root@<toon>` (or without an argument to get two
+   values to type in the app under *Oudere Homey*). You log in once in the
+   browser, under a throwaway CLI profile, so your own `homey login` stays.
+2. The Toon then keeps `cloud_refresh` (an Athom OAuth refresh token for the
+   official Homey CLI client) and `homey_id`, and every 20 hours, or as soon as
+   Homey refuses the token, it does: refresh token -> access token
+   (`api.athom.com/oauth2/token`) -> delegation token for this Homey
+   (`/delegation/token?audience=homey`) -> `POST /api/manager/users/login` on
+   the Homey itself -> new `token`. A new refresh token from Athom is stored
+   straight away.
+
+The renewal needs internet on the Toon; the Homey itself is still reached
+locally. Tokens and keys go to curl through a private file, never on a command
+line, and `homey.conf` is mode 0600.
 
 ## Settings
 
@@ -46,6 +58,10 @@ token=
 flows=
 devices=
 poll=20
+# older Homey: filled in by tools/homey-login.sh, then renewed by the app
+cloud_refresh=
+homey_id=
+token_at=0
 # automatic starts, all off by default; auto=1 switches the rules on
 auto=0
 # flow id to start when the Toon switches to that program (button or weekly schedule)
@@ -73,6 +89,7 @@ flow is chosen. The flow must still be one Homey can start by hand.
 | `homey` | launcher (manifest `binary`), runs `homey.toon2` or `homey.toon1` |
 | `homey_daemon.c` | daemon: Homey API, commands from the UI, tile, `state.json` |
 | `screen_homey.c` | UI plugin `homey_ui.<toon>.so` |
+| `tools/homey-login.sh` | one-time login for an older Homey (runs on a computer) |
 | `ftapp.h`, `ftjson.h`, `ftui.h` | small shared helpers (same copy in the other apps of this set) |
 
 Live state: `/var/volatile/tmp/homey/` (`state.json`, `flows_all.json`,

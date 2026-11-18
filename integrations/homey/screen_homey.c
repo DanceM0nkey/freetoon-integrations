@@ -59,8 +59,15 @@ static const ftui_field_t FIELDS[] = {
       "The Homey's IP address on your network, e.g. 192.168.1.30.", 0, 60 },
     { "token", "Toegangstoken", "Access token",
       "Homey Pro: Instellingen > API-sleutels. Oudere Homey: zie README (sessietoken).",
-      "Homey Pro: Settings > API keys. Older Homey: see README (session token).", 1, 150 },
+      "Homey Pro: Settings > API keys. Older Homey: see README (session token).", 1, 1090 },
+    { "homey_id", "Homey-id", "Homey id",
+      "Alleen oudere Homey: wordt ingevuld door tools/homey-login.sh.",
+      "Older Homey only: filled in by tools/homey-login.sh.", 0, 30 },
+    { "cloud_refresh", "Vernieuwsleutel", "Renewal key",
+      "Alleen oudere Homey: de app vernieuwt hiermee elke dag zelf het token.",
+      "Older Homey only: the app uses it to renew the token every day.", 1, 500 },
 };
+#define N_CONN 2                                   /* address + token; the rest under "Oudere Homey" */
 #define N_FIELDS ((int)(sizeof FIELDS / sizeof FIELDS[0]))
 
 static void rebuild(void);
@@ -426,7 +433,7 @@ static void build_settings(lv_obj_t * body) {
     ftui_header(body, "Homey", tr("Instellingen", "Settings"), on_settings_back);
     lv_obj_t * sc = ftui_scroller(body, FTUI_MARGIN, FTUI_TOP, SX(1024) - 2 * FTUI_MARGIN, SY(600) - FTUI_TOP - FTUI_MARGIN);
     lv_coord_t y = 0, w = SX(1024) - 2 * FTUI_MARGIN - SX(8);
-    for (int i = 0; i < N_FIELDS; i++) y += ftui_field_row(sc, y, w, &FIELDS[i], CONF_PATH, on_field_edit, i) + SY(8);
+    for (int i = 0; i < N_CONN; i++) y += ftui_field_row(sc, y, w, &FIELDS[i], CONF_PATH, on_field_edit, i) + SY(8);
     y += pick_row(sc, y, w, tr("Flows op de Toon", "Flows on the Toon"), "flows", on_pick_flows) + SY(8);
     y += pick_row(sc, y, w, tr("Apparaten op de Toon", "Devices on the Toon"), "devices", on_pick_devices) + SY(8);
 
@@ -463,6 +470,11 @@ static void build_settings(lv_obj_t * body) {
         y += h + SY(8);
     }
     jfree(all);
+
+    /* older Homey: automatic token renewal */
+    y += ftui_section(sc, y, tr("Oudere Homey (zonder API-sleutels)", "Older Homey (no API keys)"));
+    for (int i = N_CONN; i < N_FIELDS; i++) y += ftui_field_row(sc, y, w, &FIELDS[i], CONF_PATH, on_field_edit, i) + SY(8);
+
     lv_obj_t * h = ftui_label_at(sc, FTUI_G(1), y + SY(8),
         tr("Programma-regels reageren op een knop op de Toon en op het weekschema. Alles staat standaard uit.",
            "Program rules react to a button on the Toon and to the weekly schedule. Everything is off by default."),

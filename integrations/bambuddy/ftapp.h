@@ -446,13 +446,16 @@ static int ft_http_get(const char * url, const char * const * headers, int timeo
     return code;
 }
 
-/* curl with a method and JSON body ("PUT"/"POST"). Same return as ft_http_get. */
-static int ft_http_send(const char * method, const char * url, const char * const * headers,
-                        const char * json, int timeout_s, char ** body) {
-    char * argv[44];
-    char tmo[16], code_fmt[] = "\n%{http_code}";
+/* curl with a method and a body ("PUT"/"POST"). The body goes through a 0600
+ * file as well (it may hold a token), never through the command line.
+ * Same return as ft_http_get. */
+static int ft_http_body(const char * method, const char * url, const char * const * headers, const char * content_type,
+                        const char * data, int timeout_s, char ** body) {
+    char * argv[40];
+    char tmo[16], code_fmt[] = "\n%{http_code}", ctype[96];
     int a = 0;
     snprintf(tmo, sizeof tmo, "%d", timeout_s);
+    snprintf(ctype, sizeof ctype, "Content-Type: %s", content_type);
     argv[a++] = (char *)"curl";
     argv[a++] = (char *)"-s";
     argv[a++] = (char *)"-m";
@@ -462,15 +465,29 @@ static int ft_http_send(const char * method, const char * url, const char * cons
     argv[a++] = (char *)"-w";
     argv[a++] = code_fmt;
     argv[a++] = (char *)"-H";
-    argv[a++] = (char *)"Content-Type: application/json";
-    char hfile[128] = "", harg[140];
+    argv[a++] = ctype;
+    char hfile[128] = "", harg[140], dfile[128] = "", darg[140];
     if (ft_header_file(headers, hfile, sizeof hfile) == 0) {
         snprintf(harg, sizeof harg, "@%s", hfile);
         argv[a++] = (char *)"-H";
         argv[a++] = harg;
     }
-    argv[a++] = (char *)"--data-binary";
-    argv[a++] = (char *)(json ? json : "{}");
+    const char * d = data ? data : "";
+    static unsigned dseq;
+    snprintf(dfile, sizeof dfile, FTAPP_RUN "/.body-%d-%u", (int)getpid(), dseq++);
+    unlink(dfile);
+    int fd = open(dfile, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    if (fd >= 0) {
+        if (write(fd, d, strlen(d)) < 0) { /* curl then sends what is there */ }
+        close(fd);
+        snprintf(darg, sizeof darg, "@%s", dfile);
+        argv[a++] = (char *)"--data-binary";
+        argv[a++] = darg;
+    } else {
+        dfile[0] = 0;
+        argv[a++] = (char *)"--data-binary";
+        argv[a++] = (char *)"";
+    }
     argv[a++] = (char *)"--";
     argv[a++] = (char *)url;
     argv[a] = NULL;
@@ -478,6 +495,7 @@ static int ft_http_send(const char * method, const char * url, const char * cons
     size_t len = 0;
     ftapp_run(argv, &out, &len, 256 * 1024, timeout_s);
     if (hfile[0]) unlink(hfile);
+    if (dfile[0]) unlink(dfile);
     *body = NULL;
     if (!out) return 0;
     char * nl = strrchr(out, '\n');
@@ -485,6 +503,11 @@ static int ft_http_send(const char * method, const char * url, const char * cons
     if (nl) { code = atoi(nl + 1); *nl = 0; }
     *body = out;
     return code;
+}
+
+static int ft_http_send(const char * method, const char * url, const char * const * headers,
+                        const char * json, int timeout_s, char ** body) {
+    return ft_http_body(method, url, headers, "application/json", json ? json : "{}", timeout_s, body);
 }
 
 /* ---- commands from the UI plugin ------------------------------------------ */

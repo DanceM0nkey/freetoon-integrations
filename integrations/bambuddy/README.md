@@ -23,11 +23,12 @@ Shows the status of a Bambu Lab printer managed by
 Pull asks `GET /api/v1/printers/<id>/status` every 15 s (header `X-API-Key`)
 and fetches the thumbnail from the status' `cover_url` once per print.
 
-Push: the daemon listens on port **8766** for `POST /status` (the JSON
+Push: the daemon listens on `push_port` (e.g. **8766**) for `POST /status` (the JSON
 BamBuddy's status endpoint returns) and `POST /cover` (the PNG). Its reply to
 `/status` says `{"need_cover":true}` when it has no thumbnail for the current
-print. Set `push_token` on the Toon and `TOON_TOKEN` in the relay to make the
-Toon refuse pushes without that secret (header `X-Toon-Token`).
+print. Push is off until you set `push_port` (e.g. 8766) **and** a
+`push_token` of at least 8 characters; the relay sends the same secret as
+`TOON_TOKEN` (header `X-Toon-Token`), and pushes without it are refused.
 
 ```sh
 BAMBUDDY_URL=http://127.0.0.1:8000 BAMBUDDY_KEY=... TOON=192.168.1.50 TOON_TOKEN=... \
@@ -50,7 +51,7 @@ api_key=
 printer_id=0
 poll=15
 # push: port (0 = off), shared secret, the relay's address (empty = any)
-push_port=8766
+push_port=0
 push_token=
 push_from=
 # options, 1 = on (all off by default)

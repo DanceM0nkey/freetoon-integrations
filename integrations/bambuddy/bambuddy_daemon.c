@@ -76,7 +76,7 @@ static void load_conf(void) {
     memset(&c, 0, sizeof c);
     c.printer_id = 0;
     c.poll_s = 15;
-    c.push_port = 8766;
+    c.push_port = 0;                  /* push is opt-in */
     if (t) {
         char v[32];
         ft_conf_get(t, "url", c.url, sizeof c.url);
@@ -100,8 +100,8 @@ static void load_conf(void) {
             "# 0 = first printer\n"
             "printer_id=0\n"
             "poll=15\n"
-            "# push: port for a relay (0 = off), shared secret, relay address (empty = any)\n"
-            "push_port=8766\n"
+            "# push from a relay: port (e.g. 8766; 0 = off), shared secret (required), relay address (empty = any)\n"
+            "push_port=0\n"
             "push_token=\n"
             "push_from=\n"
             "# options (1 = on): Inbox notification when a print is done or fails;\n"
@@ -119,6 +119,10 @@ static void load_conf(void) {
     if (c.push_port == 22 || c.push_port == 80 || c.push_port == 1337 || c.push_port == 5900 || c.push_port == 10081 ||
         c.push_port == 10080) {
         ftlog("push_port %d is used by the Toon itself, push stays off", c.push_port);
+        c.push_port = 0;
+    }
+    if (c.push_port && strlen(c.push_token) < 8) {
+        ftlog("push needs push_token (8+ characters); push stays off");
         c.push_port = 0;
     }
     struct in_addr ia;
@@ -522,7 +526,11 @@ static void push_handle(int fd) {
     }
     if (!strcmp(method, "GET") && !strcmp(path, "/")) { http_reply(fd, 200, "{\"app\":\"bambuddy\",\"ok\":true}"); return; }
     if (strcmp(method, "POST") != 0) { http_reply(fd, 404, "{\"ok\":false}"); return; }
-    if (g_conf.push_token[0] && strcmp(token, g_conf.push_token) != 0) { http_reply(fd, 401, "{\"ok\":false}"); return; }
+    /* constant-time compare of the shared secret */
+    size_t tl = strlen(g_conf.push_token), gl = strlen(token);
+    unsigned diff = (unsigned)(tl ^ gl) | (tl == 0);
+    for (size_t i = 0; i < tl; i++) diff |= (unsigned char)g_conf.push_token[i] ^ (unsigned char)(i < gl ? token[i] : 0);
+    if (diff) { http_reply(fd, 401, "{\"ok\":false}"); return; }
     long max = !strcmp(path, "/cover") ? MAX_COVER : MAX_STATUS;
     if (clen < 0 || clen > max) { http_reply(fd, 413, "{\"ok\":false}"); return; }
 

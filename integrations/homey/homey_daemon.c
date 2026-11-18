@@ -140,6 +140,9 @@ static int load_conf(void) {
 /* ---- config writes (token renewal) -------------------------------------------------- */
 
 static void conf_write_key(const char * key, const char * value) {
+    /* values come from network answers: a line break would add config lines */
+    for (const unsigned char * p = (const unsigned char *)value; *p; p++)
+        if (*p < 0x20 || *p == 0x7f) { ftlog("not saving %s: control character in the value", key); return; }
     char * t = ft_read_file(CONF_PATH, NULL);
     size_t cap = (t ? strlen(t) : 0) + strlen(key) + strlen(value) + 8, o = 0, kl = strlen(key);
     char * out = (char *)malloc(cap);
@@ -248,6 +251,13 @@ static void form_enc(const char * in, char * out, size_t n) {
     out[o] = 0;
 }
 
+/* Tokens are base64url / hex / JWT-like: letters, digits, - _ . : only. */
+static int token_chars_ok(const char * s) {
+    if (!s || !*s) return 0;
+    for (; *s; s++) if (!isalnum((unsigned char)*s) && *s != '-' && *s != '_' && *s != '.' && *s != ':') return 0;
+    return 1;
+}
+
 /* 1 when a new session token was stored. */
 static int renew_session(void) {
     if (!g_conf.cloud_refresh[0] || !g_conf.homey_id[0] || !g_conf.host[0] || !id_ok(g_conf.homey_id)) return 0;
@@ -274,6 +284,7 @@ static int renew_session(void) {
         jfree(r);
         return 0;
     }
+    if (refresh[0] && !token_chars_ok(refresh)) refresh = "";      /* never store anything odd */
     if (refresh[0] && strcmp(refresh, g_conf.cloud_refresh) != 0) {
         snprintf(g_conf.cloud_refresh, sizeof g_conf.cloud_refresh, "%s", refresh);
         conf_write_key("cloud_refresh", refresh);  /* store it before anything else can fail */
@@ -304,7 +315,7 @@ static int renew_session(void) {
     free(login);
     jv * tok = code == 200 ? jparse(body) : NULL;
     free(body);
-    if (!tok || tok->type != JV_STR || strlen(tok->s) >= sizeof g_conf.token) {
+    if (!tok || tok->type != JV_STR || strlen(tok->s) >= sizeof g_conf.token || !token_chars_ok(tok->s)) {
         ftlog("token renewal: Homey login failed (HTTP %d)", code);
         jfree(tok);
         return 0;

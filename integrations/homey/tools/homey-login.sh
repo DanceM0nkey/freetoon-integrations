@@ -21,7 +21,9 @@ chmod 700 "$D"
 umask 077
 
 echo "A browser window opens: log in with the Athom account of your Homey."
-HOME="$D" homey login
+# The CLI can exit non-zero after a good login (its code prompt is still open),
+# so judge by the stored login, not by the exit code.
+HOME="$D" homey login || true
 
 F="$D/.athom-cli/settings.json"
 [ -f "$F" ] || { echo "No login found, try again." >&2; exit 1; }
@@ -34,7 +36,7 @@ printf 'Authorization: Bearer %s\n' "$ACCESS" > "$D/h"
 curl -s -m 20 -H @"$D/h" https://api.athom.com/user/me > "$D/me.json"
 node -e '
 const me = require(process.argv[1]);
-for (const h of (me.homeys || [])) console.log(h._id || h.id, "\t" + (h.name || "") + "\t" + (h.modelName || h.model || ""));
+for (const h of (me.homeys || [])) console.log([h._id || h.id, h.name || "", h.modelName || h.model || ""].join("\t"));
 ' "$D/me.json" > "$D/homeys"
 N=$(wc -l < "$D/homeys" | tr -d " ")
 if [ "$N" -eq 0 ]; then echo "This account has no Homey." >&2; exit 1; fi

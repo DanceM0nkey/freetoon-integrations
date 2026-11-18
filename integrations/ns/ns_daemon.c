@@ -73,6 +73,9 @@ static int    g_n;
 /* ---- config ------------------------------------------------------------- */
 
 static void conf_write_key(const char * key, const char * value) {
+    /* values come from network answers: a line break would add config lines */
+    for (const unsigned char * p = (const unsigned char *)value; *p; p++)
+        if (*p < 0x20 || *p == 0x7f) { ftlog("not saving %s: control character in the value", key); return; }
     char * t = ft_read_file(CONF_PATH, NULL);
     size_t cap = (t ? strlen(t) : 0) + strlen(key) + strlen(value) + 8, o = 0, kl = strlen(key);
     char * out = (char *)malloc(cap);

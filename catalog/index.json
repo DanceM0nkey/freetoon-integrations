@@ -76,6 +76,13 @@
       "version": "1.0.0",
       "description": "Printerstatus uit BamBuddy: voortgang, resterende tijd, bestand, temperaturen, AMS en een miniatuur; melding als de print klaar is.",
       "url": "https://raw.githubusercontent.com/ToonzDev/freetoon-integrations/main/packages/bambuddy.tgz"
+    },
+    {
+      "id": "ns",
+      "name": "NS Vertrektijden",
+      "version": "1.0.0",
+      "description": "De eerstvolgende treinen vanaf je station met richting, vertraging en spoorwijziging (gratis NS API-sleutel).",
+      "url": "https://raw.githubusercontent.com/ToonzDev/freetoon-integrations/main/packages/ns.tgz"
     }
   ]
 }

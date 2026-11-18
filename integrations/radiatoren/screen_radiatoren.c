@@ -17,6 +17,13 @@
  * follows the room whose name equals its Home Assistant area.
  */
 #define _GNU_SOURCE
+/* Layout independence: every `settings` below (also inside FreeToon's inline
+ * helpers such as tr() and the THEME_* fallbacks) is this plugin's own copy,
+ * filled from toonui.cfg in host_settings_refresh(). The plugin never reads
+ * toonui's settings_t, so it declares no settings fields and keeps loading
+ * when FreeToon moves fields around (1.0.12 -> 1.0.13 moved home_light_mode
+ * twice, and every toonui then refused the plugin). */
+#define settings rad_host_settings
 #include "lvgl/lvgl.h"
 #include "screens.h"
 #include "display.h"
@@ -34,11 +41,28 @@
 #include <string.h>
 #include <time.h>
 
-/* Settings fields this plugin touches (tr() reads `language`); toonui refuses
- * to load the plugin if any of them moved. */
-FT_PLUGIN_DECLARE_ABI(
-    FT_SETTINGS_FIELD(language),
-    FT_SETTINGS_FIELD(home_light_mode));
+/* No settings fields: see host_settings_refresh(). */
+FT_PLUGIN_DECLARE_ABI_NO_SETTINGS();
+
+settings_t rad_host_settings;   /* language + home_light_mode from toonui.cfg */
+
+/* The two values the plugin needs, read from toonui's own config file (toonui
+ * writes it on every settings change). Missing file or key: keep what is
+ * there (the host preview sets the fields itself). */
+static void host_settings_refresh(void) {
+    const char * d = getenv("TOONUI_DATA_DIR");
+    char path[256], line[160];
+    snprintf(path, sizeof path, "%s/toonui.cfg", d && d[0] ? d : "/mnt/data");
+    FILE * f = fopen(path, "r");
+    if (!f) return;
+    while (fgets(line, sizeof line, f)) {
+        if (!strncmp(line, "language=", 9))
+            settings.language = atoi(line + 9) == LANG_EN ? LANG_EN : LANG_NL;
+        else if (!strncmp(line, "home_light_mode=", 16))
+            settings.home_light_mode = atoi(line + 16) ? 1 : 0;
+    }
+    fclose(f);
+}
 
 #define EXPORT __attribute__((visibility("default")))
 
@@ -822,6 +846,7 @@ static void on_root_deleted(lv_event_t * e) {
 EXPORT lv_obj_t * screen_create(void) {
     if (s_root) { lv_obj_del(s_root); s_root = NULL; }
 
+    host_settings_refresh();
     rad_load_settings(&s_set, settings_path());
     s_view = VIEW_OVERVIEW;
     s_edit_id[0] = 0;

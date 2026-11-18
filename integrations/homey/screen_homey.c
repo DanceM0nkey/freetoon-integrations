@@ -273,6 +273,13 @@ static void build_main(lv_obj_t * body, jv * s) {
 
 /* ---- pickers -------------------------------------------------------------------- */
 
+/* Homey flow/device ids: letters, digits and '-', at most 40 (same rule as the daemon) */
+static int homey_id_ok(const char * s) {
+    if (!s || !*s || strlen(s) > 40) return 0;
+    for (; *s; s++) if (!isalnum((unsigned char)*s) && *s != '-') return 0;
+    return 1;
+}
+
 static int list_has(const char * list, const char * id) {
     size_t n = strlen(id);
     if (!n) return 0;
@@ -348,7 +355,9 @@ static void build_picker(lv_obj_t * body, int flows) {
     }
     int i = 0;
     for (jv * it = jfirst(all); it && i < MAX_PICK; it = it->next, i++) {
-        snprintf(s_pick_ids[i], sizeof s_pick_ids[0], "%s", jstr(it, "id", ""));
+        const char * pid = jstr(it, "id", "");
+        if (!homey_id_ok(pid)) { i--; continue; }   /* only plain Homey ids get stored */
+        snprintf(s_pick_ids[i], sizeof s_pick_ids[0], "%s", pid);
         int on = list_has(sel, s_pick_ids[i]);
         lv_obj_t * row = ftui_button(sc, 0, y, rw, rh, on ? THEME_ACCENT_SOFT : THEME_CARD_BG, THEME_TEXT_HI, NULL, NULL, on_pick_row, i);
         lv_obj_set_style_radius(row, THEME_RADIUS_TILE, 0);

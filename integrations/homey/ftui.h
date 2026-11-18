@@ -134,6 +134,9 @@ static void ftui_conf_get(const char * path, const char * key, char * out, size_
 
 /* Set key=value in the file, keeping every other line (and comments). */
 static int ftui_conf_set(const char * path, const char * key, const char * value) {
+    /* config is line based: a line break in a value would add settings */
+    for (const unsigned char * p = (const unsigned char *)value; *p; p++)
+        if (*p < 0x20 || *p == 0x7f) return -1;
     char * t = ftui_read(path);
     size_t kl = strlen(key), cap = (t ? strlen(t) : 0) + strlen(value) + kl + 8;
     char * out = (char *)malloc(cap);

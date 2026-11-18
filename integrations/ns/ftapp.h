@@ -113,7 +113,8 @@ static void ft_mkdirs(const char * dir) {
 static int ft_write_atomic(const char * path, const void * data, size_t len, int durable) {
     char tmp[300];
     snprintf(tmp, sizeof tmp, "%s.tmp%d", path, (int)getpid());
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    unlink(tmp);                                   /* never write through a planted symlink */
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
     if (fd < 0) return -1;
     const char * p = (const char *)data;
     size_t left = len;
@@ -393,6 +394,22 @@ static int ftapp_run(char * const argv[], char ** out, size_t * out_len, size_t 
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
+/* Write headers (API keys, tokens) to a private file for `curl -H @file`, so
+ * they never show up in the process list. 0 when a file was written. */
+static int ft_header_file(const char * const * headers, char * path, size_t n) {
+    if (!headers || !headers[0]) return -1;
+    static unsigned seq;
+    snprintf(path, n, FTAPP_RUN "/.hdr-%d-%u", (int)getpid(), seq++);
+    unlink(path);
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    if (fd < 0) { path[0] = 0; return -1; }
+    for (int i = 0; headers[i]; i++) {
+        if (write(fd, headers[i], strlen(headers[i])) < 0 || write(fd, "\n", 1) < 0) break;
+    }
+    close(fd);
+    return 0;
+}
+
 /* GET url with curl. headers: NULL-terminated list of "Name: value". Returns
  * the HTTP status (0 when unreachable) and the body in *body (caller frees). */
 static int ft_http_get(const char * url, const char * const * headers, int timeout_s, char ** body, size_t max_bytes) {
@@ -407,13 +424,19 @@ static int ft_http_get(const char * url, const char * const * headers, int timeo
     argv[a++] = tmo;
     argv[a++] = (char *)"-w";
     argv[a++] = code_fmt;
-    for (int i = 0; headers && headers[i] && a < 34; i++) { argv[a++] = (char *)"-H"; argv[a++] = (char *)headers[i]; }
+    char hfile[128] = "", harg[140];
+    if (ft_header_file(headers, hfile, sizeof hfile) == 0) {
+        snprintf(harg, sizeof harg, "@%s", hfile);
+        argv[a++] = (char *)"-H";
+        argv[a++] = harg;
+    }
     argv[a++] = (char *)"--";
     argv[a++] = (char *)url;
     argv[a] = NULL;
     char * out = NULL;
     size_t len = 0;
     ftapp_run(argv, &out, &len, max_bytes, timeout_s);
+    if (hfile[0]) unlink(hfile);
     *body = NULL;
     if (!out) return 0;
     char * nl = strrchr(out, '\n');
@@ -440,7 +463,12 @@ static int ft_http_send(const char * method, const char * url, const char * cons
     argv[a++] = code_fmt;
     argv[a++] = (char *)"-H";
     argv[a++] = (char *)"Content-Type: application/json";
-    for (int i = 0; headers && headers[i] && a < 36; i++) { argv[a++] = (char *)"-H"; argv[a++] = (char *)headers[i]; }
+    char hfile[128] = "", harg[140];
+    if (ft_header_file(headers, hfile, sizeof hfile) == 0) {
+        snprintf(harg, sizeof harg, "@%s", hfile);
+        argv[a++] = (char *)"-H";
+        argv[a++] = harg;
+    }
     argv[a++] = (char *)"--data-binary";
     argv[a++] = (char *)(json ? json : "{}");
     argv[a++] = (char *)"--";
@@ -449,6 +477,7 @@ static int ft_http_send(const char * method, const char * url, const char * cons
     char * out = NULL;
     size_t len = 0;
     ftapp_run(argv, &out, &len, 256 * 1024, timeout_s);
+    if (hfile[0]) unlink(hfile);
     *body = NULL;
     if (!out) return 0;
     char * nl = strrchr(out, '\n');
@@ -495,7 +524,16 @@ static void ftapp_init(void) {
     signal(SIGINT, ftapp_on_signal_);
     signal(SIGCHLD, SIG_DFL);
     ft_mkdirs(FTAPP_DIR);
+    /* FTAPP_RUN sits under a world-writable tmp: make sure it is our own directory */
+    struct stat st;
+    if (lstat(FTAPP_RUN, &st) == 0 && (!S_ISDIR(st.st_mode) || st.st_uid != getuid())) {
+        char aside[200];
+        snprintf(aside, sizeof aside, FTAPP_RUN ".bad%ld", (long)time(NULL));
+        rename(FTAPP_RUN, aside);
+        ftlog("moved a foreign %s aside", FTAPP_RUN);
+    }
     ft_mkdirs(FTAPP_RUN);
+    chmod(FTAPP_RUN, 0755);                        /* toonui (same uid) writes cmd files here */
     ftapp_load_uuid_();
     ftlog("starting, uuid %s", ftapp_uuid);
 }

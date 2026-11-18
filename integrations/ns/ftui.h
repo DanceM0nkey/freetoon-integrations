@@ -94,7 +94,8 @@ static char * ftui_read(const char * path) {
 static int ftui_write_atomic(const char * path, const char * text) {
     char tmp[300];
     snprintf(tmp, sizeof tmp, "%s.tmp%d", path, (int)getpid());
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    unlink(tmp);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
     if (fd < 0) return -1;
     size_t len = strlen(text);
     const char * p = text;
